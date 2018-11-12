@@ -6,7 +6,7 @@ from cvxopt import matrix
 
 class tuning_curves:
     def __init__(self, A, Tarr, sigma, iin, order = 0, mode = 'train', test_r = None, \
-                 TEST_FRACTION = 0.3):
+                 TEST_FRACTION = 0.3, status = 'parent'):
 
         self.Q, self.N, self.R = A.shape
         self.A = A
@@ -16,11 +16,13 @@ class tuning_curves:
         self.__gen_locs__()
         self.mode = mode
         self.P = order
+        self.freq_threshold = 20
 
         self.fcount = 0
         self.fs = {}
         self.raw_decoders = {}
         self.cvx_decoders = {}
+        self.status = status
 
         # Produce train and test tuning curve objects if the mode is cross-validation
         if (self.mode == 'cross-validate'):
@@ -33,6 +35,9 @@ class tuning_curves:
                                               self.sigma, self.iin, order = self.P, mode = 'train')
             self.test_curves = tuning_curves(self.A[:,:,self.test_r], self.Tarr[self.test_r],
                                              self.sigma, self.iin, order = self.P, mode = 'test')
+            self.child = self.train_curves.child
+            self.bad_neurons = self.train_curves.bad_neurons
+            self.Ngood = self.train_curves.Ngood
         self.__gen__()
         if (self.mode != 'test'):
             self.__fresh_invert__()
@@ -43,7 +48,21 @@ class tuning_curves:
         self.__gen_B__()
         self.__gen_W__()
         self.__gen_cs__()
+        if((self.status == 'parent') & (self.mode == 'train')):
+        	self.__gen_bad_ns__()
         self.metric = None
+
+    def __gen_bad_ns__(self):
+    	self.bad_neurons = np.zeros((self.N)).astype(bool)
+    	for n in range(self.N):
+    		a = self.A[:,n,:]
+    		if (np.max(a) < self.freq_threshold):
+    			self.bad_neurons[n] = True
+    	print('creating child')
+    	self.child = tuning_curves(
+    		self.A[:,~self.bad_neurons, :], self.Tarr, self.sigma, self.iin, order = self.P, 
+    		mode = self.mode, status = 'child')
+    	self.Ngood = self.N - np.sum(self.bad_neurons)
 
     def __fresh_invert__(self):
         if (self.mode == 'cross-validate'):
@@ -205,10 +224,18 @@ class tuning_curves:
                                                               self.iin[firing][0], 0.001])
         return threshold, gain
 
+    def pad_decoder(self, d):
+    	dd = np.zeros((self.N))
+    	dd[~self.bad_neurons] = d[:,-1]
+    	return dd
+
+
     def decode_raw(self, f_target):
         fstring = str(self.fcount)
         self.fs[fstring] = f_target
-        d = self.csinv @ self.W @ f_target
+        d = self.child.csinv @ self.child.W @ f_target
+        d.reshape(-1)
+        d = self.pad_decoder(d)
         self.raw_decoders[fstring] = d
         self.cvx_decoders[fstring] = 'Not CVX Decoded'
         self.fcount += 1
@@ -223,9 +250,9 @@ class tuning_curves:
             print('Not implemented for order ' + str(self.P))
 
     def decode_cvx_LSAT(self, f):
-        N = self.N
-        P= self.cs
-        q = -self.W @ f
+        N = self.Ngood
+        P= self.child.cs
+        q = -self.child.W @ f
         G = np.zeros((2*N, N))
         G[:N,:] = np.eye(N)
         G[N:, :] = -np.eye(N)
@@ -238,6 +265,7 @@ class tuning_curves:
 
         solution = qp(P, q, G, h)
         d = np.array(solution['x'])
+        d = self.pad_decoder(d)
 
         fstring = str(self.fcount)
         self.fs[fstring] = f
@@ -253,9 +281,9 @@ class tuning_curves:
         else:
             T1 = Ts[0]
             T2 = Ts[1]
-        N = self.N
-        P= self.cs
-        q = -self.W @ f
+        N = self.child.Ngood
+        P= self.child.cs
+        q = -self.child.W @ f
         G = np.zeros((4*N, 2*N))
         I = np.eye(N)
         G[:N,:N] = I
