@@ -225,8 +225,9 @@ class tuning_curves:
         return threshold, gain
 
     def pad_decoder(self, d):
-    	dd = np.zeros((self.N))
-    	dd[~self.bad_neurons] = d[:,-1]
+    	dd = np.zeros((self.N*(self.P+1)))
+    	for k in range(self.P + 1):
+    	    dd[k*self.N : (k+1)*self.N][~self.bad_neurons] = d[k*self.Ngood:(k+1)*self.Ngood, -1]
     	return dd
 
 
@@ -281,7 +282,7 @@ class tuning_curves:
         else:
             T1 = Ts[0]
             T2 = Ts[1]
-        N = self.child.Ngood
+        N = self.Ngood
         P= self.child.cs
         q = -self.child.W @ f
         G = np.zeros((4*N, 2*N))
@@ -304,6 +305,7 @@ class tuning_curves:
 
         solution = qp(P, q, G, h)
         d = np.array(solution['x']).reshape(-1)
+        d = self.pad_decoder(d)
 
         fstring = str(self.fcount)
         self.fs[fstring] = f
