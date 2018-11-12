@@ -225,9 +225,10 @@ class tuning_curves:
         return threshold, gain
 
     def pad_decoder(self, d):
+    	print(d.shape)
     	dd = np.zeros((self.N*(self.P+1)))
     	for k in range(self.P + 1):
-    	    dd[k*self.N : (k+1)*self.N][~self.bad_neurons] = d[k*self.Ngood:(k+1)*self.Ngood, -1]
+    	    dd[k*self.N : (k+1)*self.N][~self.bad_neurons] = d[k*self.Ngood:(k+1)*self.Ngood]
     	return dd
 
 
@@ -235,7 +236,7 @@ class tuning_curves:
         fstring = str(self.fcount)
         self.fs[fstring] = f_target
         d = self.child.csinv @ self.child.W @ f_target
-        d.reshape(-1)
+        d = d.reshape(-1)
         d = self.pad_decoder(d)
         self.raw_decoders[fstring] = d
         self.cvx_decoders[fstring] = 'Not CVX Decoded'
@@ -265,7 +266,7 @@ class tuning_curves:
         h = matrix(h)
 
         solution = qp(P, q, G, h)
-        d = np.array(solution['x'])
+        d = np.array(solution['x']).reshape(-1)
         d = self.pad_decoder(d)
 
         fstring = str(self.fcount)
