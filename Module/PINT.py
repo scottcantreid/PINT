@@ -6,7 +6,7 @@ from cvxopt import matrix
 
 class tuning_curves:
     def __init__(self, A, Tarr, sigma, iin, order = 0, mode = 'train', test_r = None, \
-                 TEST_FRACTION = 0.3, status = 'parent'):
+                 TEST_FRACTION = 0.3, status = 'parent', max_freq = None, min_freq = 20):
 
         self.Q, self.N, self.R = A.shape
         self.A = A
@@ -16,13 +16,14 @@ class tuning_curves:
         self.__gen_locs__()
         self.mode = mode
         self.P = order
-        self.freq_threshold = 20
 
         self.fcount = 0
         self.fs = {}
         self.raw_decoders = {}
         self.cvx_decoders = {}
         self.status = status
+        self.max_freq = max_freq
+        self.min_freq = min_freq
 
         # Produce train and test tuning curve objects if the mode is cross-validation
         if (self.mode == 'cross-validate'):
@@ -56,8 +57,12 @@ class tuning_curves:
     	self.bad_neurons = np.zeros((self.N)).astype(bool)
     	for n in range(self.N):
     		a = self.A[:,n,:]
-    		if (np.max(a) < self.freq_threshold):
+    		mfq = np.mean(a)
+    		if (mfq < self.min_freq):
     			self.bad_neurons[n] = True
+    		elif (self.max_freq is not None):
+    			if (mfq > self.max_freq):
+    				self.bad_neurons[n] = True
     	print('creating child')
     	self.child = tuning_curves(
     		self.A[:,~self.bad_neurons, :], self.Tarr, self.sigma, self.iin, order = self.P, 
