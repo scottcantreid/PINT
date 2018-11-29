@@ -63,7 +63,6 @@ class tuning_curves:
     		elif (self.max_freq is not None):
     			if (mfq > self.max_freq):
     				self.bad_neurons[n] = True
-    	print('creating child')
     	self.child = tuning_curves(
     		self.A[:,~self.bad_neurons, :], self.Tarr, self.sigma, self.iin, order = self.P, 
     		mode = self.mode, status = 'child')
@@ -79,7 +78,7 @@ class tuning_curves:
             self.W = self.train_curves.W
 
             self.test_eop = np.eye(self.Q)
-            self.test_eop += self.train_curves.W.T @ self.train_curves.csinv @ self.test_curves.cs @ \
+            self.test_eop += self.train_curves.W.T @ self.train_curves.csinv @ self.test_curves.cov @ \
                              self.train_curves.csinv @ self.train_curves.W
             self.test_eop -= self.train_curves.W.T @ self.train_curves.csinv @ self.test_curves.W
             self.test_eop -= self.test_curves.W.T @ self.train_curves.csinv @ self.train_curves.W
@@ -88,7 +87,7 @@ class tuning_curves:
 
         else:
             self.csinv = np.linalg.inv(self.cs)
-            self.eop = np.eye(self.Q) - self.W.T @ self.csinv @ self.W
+            self.eop = np.eye(self.Q) - 2*self.W.T @ self.csinv @ self.W + self.W.T @ self.csinv @ self.cov @ self.csinv @ self.W
             self.trace = np.trace(self.eop)
             self.eigenerrors, self.eigenfunctions = np.linalg.eigh(self.eop)
 
@@ -281,6 +280,45 @@ class tuning_curves:
         self.fcount += 1
         return d.reshape(-1)
 
+    def decode_cvx_SPLINT(self, f, mask, Ts = None):
+        if (Ts is None):
+            T1 = np.max(self.Tarr)
+            T2 = np.min(self.Tarr)
+        else:
+            T1 = Ts[0]
+            T2 = Ts[1]
+        N = self.Ngood
+        P= self.child.cs + mask
+        q = -self.child.W @ f
+        G = np.zeros((4*N, 2*N))
+        I = np.eye(N)
+        G[:N,:N] = I
+        G[:N,N:] = T1*I
+        G[N:2*N, :N] = -I
+        G[N:2*N, N:] = -T1*I
+        G[2*N:3*N, :N] = I
+        G[2*N:3*N, N:] = T2*I
+        G[3*N:, :N] = -I
+        G[3*N:, N:] = -T2*I
+
+        h = np.ones(4*N)*(1-1/128)
+
+        P = matrix(P)
+        q = matrix(q)
+        G = matrix(G)
+        h = matrix(h)
+
+        solution = qp(P, q, G, h)
+        d = np.array(solution['x']).reshape(-1)
+        d = self.pad_decoder(d)
+
+        fstring = str(self.fcount)
+        self.fs[fstring] = f
+        self.cvx_decoders[fstring] = d.reshape(-1)
+        self.raw_decoders[fstring] = 'Not raw decoded'
+        self.fcount += 1
+        return d.reshape(-1)
+
     def decode_cvx_LINT(self, f, Ts = None):
         if (Ts is None):
             T1 = np.max(self.Tarr)
@@ -302,7 +340,7 @@ class tuning_curves:
         G[3*N:, :N] = -I
         G[3*N:, N:] = -T2*I
 
-        h = np.ones(4*N)
+        h = np.ones(4*N)*(1-1/128)
 
         P = matrix(P)
         q = matrix(q)
@@ -319,3 +357,77 @@ class tuning_curves:
         self.raw_decoders[fstring] = 'Not raw decoded'
         self.fcount += 1
         return d.reshape(-1)
+
+def beam_splint(tc, f, B):
+    es = np.ndarray(tc.N)
+    d_opt = np.ndarray((tc.N, 2*tc.N))
+    ks = np.linspace(1, tc.N-1, tc.N-1).astype(int)
+    
+    Ns = np.ndarray(tc.N)
+    k_sets = [[]]
+    
+    I = np.eye(tc.Q)
+    Wtr = tc.train_curves.W
+    Wte = tc.test_curves.W
+    cs = tc.train_curves.cs
+    cov_te = tc.test_curves.cov
+    
+    ds = [tc.decode_raw(f)]
+    for k in tqdm(ks):
+        ds_new = []
+        es_new = []
+        kk_new = []
+        for d in ds:
+            nsort = np.argsort(np.abs(d[tc.N:]))[::-1]
+            for b in range(B):
+                if(k+b < tc.N):
+                    kill = np.concatenate((nsort[:k-1], [nsort[k+b-1]]))
+                    kk_new.append(kill)
+                    msk = splint_mask(tc.N, kill, 1e14)[0]
+                    cinv = np.linalg.inv(cs + msk)
+                    d = cinv@Wtr@f
+                    eop = I + Wtr.T@cinv@cov_te@cinv@Wtr - Wtr.T@cinv@Wte - Wte.T@cinv@Wtr
+                    err = f.T@eop@f / (f.T @ f)
+
+                    ds_new.append(d)
+                    es_new.append(err)
+#         print(es_new)
+        sort = np.argsort(es_new)
+        ds_new = np.array(ds_new)
+        ds = ds_new[sort[:B]]
+        es[k] = np.min(es_new)
+        dstar = ds_new[np.argmin(es_new)]
+        Ns[k] = k
+        d_opt[k] = dstar
+        k_sets.append(kk_new[np.argmin(es_new)])
+        
+    
+    tc_lsat = tuning_curves(tc.A, tc.Tarr, tc.sigma, tc.iin, 0, mode = 'cross-validate', test_r = tc.test_r) 
+    elsat = f.T @ tc_lsat.test_eop @ f / (f.T @ f)
+    kill_N = np.arange(tc.N, tc.N).astype(int)
+    msk = splint_mask(tc.N, kill_N, 1e14)[0]
+    cinv = np.linalg.inv(cs + msk)
+    d = cinv@Wtr@f
+#     eop = I + Wtr.T@cinv@cov_te@cinv@Wtr - Wtr.T@cinv@Wte - Wte.T@cinv@Wtr
+#     err = f.T@eop@f * (f.T @ f)
+    es[0] = elsat
+    Ns[0] = 0
+    d_opt[0] = d
+    return es, Ns, d_opt, k_sets
+
+def splint_mask(n, k_set, Omega):
+    """
+    Generates a regularizing mask matrix to add to M to ensure that the d1 weights are sparse.
+
+    n: number of neurons
+    k_set: a list of neuron indices for the neurons which will have nonzero d1 components
+    Omega: the factor to regularize by (1e14 works pretty well)
+
+    Returns a mask matrix to add to M which properly regularizes so that d1 is sparse.
+    Also returns "zero_set", the set of indices for neurons which will have d1 set to zero.
+    """
+    mask = np.zeros((2*n, 2*n))
+    neuron_indices = np.arange(0,n,1).astype(int)
+    zero_set = np.setdiff1d(neuron_indices, k_set)
+    mask[zero_set+n, zero_set+n] = Omega
+    return mask, zero_set
