@@ -33,9 +33,11 @@ class tuning_curves:
                 self.test_r = np.random.choice(rs, size = int(self.R*TEST_FRACTION))
             self.train_r = np.setdiff1d(rs, self.test_r)
             self.train_curves = tuning_curves(self.A[:,:,self.train_r], self.Tarr[self.train_r],
-                                              self.sigma, self.iin, order = self.P, mode = 'train')
+                                              self.sigma, self.iin, order = self.P, mode = 'train', 
+                                              max_freq = self.max_freq, min_freq = self.min_freq)
             self.test_curves = tuning_curves(self.A[:,:,self.test_r], self.Tarr[self.test_r],
-                                             self.sigma, self.iin, order = self.P, mode = 'test')
+                                             self.sigma, self.iin, order = self.P, mode = 'test', 
+                                              max_freq = self.max_freq, min_freq = self.min_freq)
             self.child = self.train_curves.child
             self.bad_neurons = self.train_curves.bad_neurons
             self.Ngood = self.train_curves.Ngood
